@@ -128,9 +128,13 @@ extension PlaybackViewModel {
                 flushPosition: pos, flushDuration: dur)
             Task { await flush() }
         } else {
-            tracker.transition(
-                to: video.id, cpn: InnerTubeAPI.generateCPN(),
-                flushPosition: 0, flushDuration: 0)
+            let flush = tracker.transition(
+                to: video.id,
+                cpn: InnerTubeAPI.generateCPN(),
+                flushPosition: 0,
+                flushDuration: 0
+            )
+            Task { await flush() }
         }
 
         // #150: on-device history, kept alongside the account reporting (which YouTube
