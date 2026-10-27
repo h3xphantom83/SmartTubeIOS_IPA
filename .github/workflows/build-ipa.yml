@@ -44,7 +44,10 @@ jobs:
             -workspace SmartTube.xcworkspace
 
       - name: Build unsigned iOS app
+        shell: bash
         run: |
+          set -o pipefail
+
           xcodebuild \
             -workspace SmartTube.xcworkspace \
             -scheme SmartTube \
@@ -53,7 +56,23 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/SmartTubeBuild" \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build 2>&1 | tee build.log
+
+      - name: Display build errors
+        if: failure()
+        run: |
+          echo "===== BUILD ERRORS ====="
+          grep -n -E \
+            'error:|fatal error:|BUILD FAILED|The following build commands failed' \
+            build.log | tail -80 || true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartTube-Build-Log
+          path: build.log
+          if-no-files-found: ignore
 
       - name: Package IPA
         run: |
