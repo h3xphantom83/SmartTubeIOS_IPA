@@ -4,119 +4,220 @@ name: Build SmartTube iOS IPA
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build Unsigned SmartTube IPA
     runs-on: macos-15
+    timeout-minutes: 60
 
     steps:
+      # --------------------------------------------
+      # 1. CHECKOUT SOURCE
+      # --------------------------------------------
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # --------------------------------------------
+      # 2. CONFIGURE XCODE
+      # --------------------------------------------
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+        run: |
+          sudo xcode-select -s \
+            /Applications/Xcode_16.4.app/Contents/Developer
 
-      - name: Set up project configuration
+          xcodebuild -version
+          swift --version
+
+      # --------------------------------------------
+      # 3. CONFIGURE FIREBASE AND BUILD SECRETS
+      # --------------------------------------------
+      - name: Configure project
+        shell: bash
         env:
           FIREBASE_PLIST_BASE64: ${{ secrets.FIREBASE_PLIST_BASE64 }}
         run: |
-          test -n "$FIREBASE_PLIST_BASE64" || {
-            echo "Firebase configuration secret is missing"
+          set -e
+
+          if [ -z "$FIREBASE_PLIST_BASE64" ]; then
+            echo "::error::FIREBASE_PLIST_BASE64 secret missing"
             exit 1
-          }
+          fi
 
           mkdir -p SmartTubeApp/Config
 
           cat > SmartTubeApp/Config/Secrets.xcconfig <<'EOF'
           SMARTTUBE_TEAM_ID =
           SMARTTUBE_TV_TEAM_ID =
+          DEVELOPMENT_TEAM =
+          CODE_SIGNING_ALLOWED = NO
           EOF
 
-          echo "$FIREBASE_PLIST_BASE64" | base64 --decode \
+          mkdir -p SmartTubeApp/SmartTubeApp
+          mkdir -p "SmartTubeApp/Smart Tube"
+
+          printf '%s' "$FIREBASE_PLIST_BASE64" \
+            | base64 -D \
             > SmartTubeApp/SmartTubeApp/GoogleService-Info.plist
 
-          mkdir -p "SmartTubeApp/Smart Tube"
           cp SmartTubeApp/SmartTubeApp/GoogleService-Info.plist \
             "SmartTubeApp/Smart Tube/GoogleService-Info.plist"
 
-      - name: Show available schemes
+          plutil -lint \
+            SmartTubeApp/SmartTubeApp/GoogleService-Info.plist
+
+          echo "Firebase configuration installed"
+
+      # --------------------------------------------
+      # 4. VERIFY WORKSPACE AND SCHEMES
+      # --------------------------------------------
+      - name: Verify Xcode workspace
         run: |
           xcodebuild -list \
             -workspace SmartTube.xcworkspace
 
-
+      # --------------------------------------------
+      # 5. BUILD UNSIGNED IOS APP
+      # --------------------------------------------
       - name: Build unsigned iOS app
         shell: bash
         run: |
           set -o pipefail
 
+          echo "================================"
+          echo "Building SmartTube for iPhone"
+          echo "Swift 5 compatibility mode"
+          echo "Release configuration"
+          echo "Code signing disabled"
+          echo "================================"
 
-xcodebuild \
-  -workspace SmartTube.xcworkspace \
-  -scheme SmartTube \
-  -configuration Release \
-  -sdk iphoneos \
-  -destination 'generic/platform=iOS' \
-  -derivedDataPath "$RUNNER_TEMP/SmartTubeBuild" \
-  SWIFT_VERSION=5 \
-  CODE_SIGNING_ALLOWED=NO \
-  -jobs 2 \
-  build > build.log 2>&1
-
+          xcodebuild \
+            -workspace SmartTube.xcworkspace \
+            -scheme SmartTube \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/SmartTubeBuild" \
+            SWIFT_VERSION=5 \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            CODE_SIGNING_ALLOWED=NO \
+            -jobs 2 \
+            build > build.log 2>&1
 
           RESULT=$?
 
+          echo ""
           echo "========== COMPILER ERRORS =========="
-          grep -n -C 5 -E \
-            'error:|fatal error:|failed|Error Domain=' \
-            build.log | head -200 || true
 
-          echo "========== LAST 100 LINES =========="
+          grep -n -C 5 -E \
+            'error:|fatal error:|BUILD FAILED|failed to' \
+            build.log | head -250 || true
+
+          echo ""
+          echo "========== LAST 100 LOG LINES =========="
+
           tail -100 build.log
 
           exit "$RESULT"
 
+      # --------------------------------------------
+      # 6. UPLOAD COMPLETE BUILD LOG
+      # --------------------------------------------
       - name: Upload complete build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SmartTube-Complete-Build-Log
           path: build.log
+          retention-days: 7
           if-no-files-found: ignore
 
-
-      - name: Display build errors
-        if: failure()
+      # --------------------------------------------
+      # 7. LOCATE COMPILED APPLICATION
+      # --------------------------------------------
+      - name: Locate compiled application
+        shell: bash
         run: |
-          echo "===== BUILD ERRORS ====="
-          grep -n -E \
-            'error:|fatal error:|BUILD FAILED|The following build commands failed' \
-            build.log | tail -80 || true
+          BUILD_DIR="$RUNNER_TEMP/SmartTubeBuild/Build/Products/Release-iphoneos"
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartTube-Build-Log
-          path: build.log
-          if-no-files-found: ignore
+          echo "Searching for SmartTube.app..."
 
-      - name: Package IPA
-        run: |
-          APP=$(find "$RUNNER_TEMP/SmartTubeBuild/Build/Products/Release-iphoneos" \
-            -maxdepth 1 -name '*.app' -type d | head -n 1)
+          find "$BUILD_DIR" -maxdepth 2 \
+            -name '*.app' -type d -print
 
-          test -n "$APP" || {
-            echo "No .app bundle was produced"
+          APP="$BUILD_DIR/SmartTube.app"
+
+          if [ ! -d "$APP" ]; then
+            echo "::error::SmartTube.app not found"
             exit 1
-          }
+          fi
 
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          zip -qry SmartTube.ipa Payload
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
 
-      - name: Upload IPA
+          echo "Application located successfully"
+
+      # --------------------------------------------
+      # 8. PACKAGE UNSIGNED IPA
+      # --------------------------------------------
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p IPA_Output/Payload
+
+          cp -R "$APP_PATH" \
+            IPA_Output/Payload/
+
+          cd IPA_Output
+
+          zip -qry SmartTube-Unsigned.ipa Payload
+
+          echo "IPA package created"
+          ls -lh SmartTube-Unsigned.ipa
+
+      # --------------------------------------------
+      # 9. VERIFY IPA STRUCTURE
+      # --------------------------------------------
+      - name: Verify IPA
+        shell: bash
+        run: |
+          set -e
+
+          IPA="IPA_Output/SmartTube-Unsigned.ipa"
+
+          unzip -t "$IPA" | tail -5
+
+          unzip -Z1 "$IPA" \
+            | grep -q '^Payload/SmartTube.app/'
+
+          echo "IPA ZIP structure verified"
+
+      # --------------------------------------------
+      # 10. UPLOAD COMPLETED IPA
+      # --------------------------------------------
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: SmartTube-Unsigned-IPA
-          path: SmartTube.ipa
-          retention-days: 7
+          path: IPA_Output/SmartTube-Unsigned.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+      # --------------------------------------------
+      # 11. BUILD SUMMARY
+      # --------------------------------------------
+      - name: Build summary
+        if: success()
+        run: |
+          echo "## SmartTube iOS Build Successful" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Configuration: Release" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Architecture: arm64" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Swift language mode: 5" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Signing: Unsigned" >> "$GITHUB_STEP_SUMMARY"
+          echo "- IPA: SmartTube-Unsigned.ipa" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the IPA from the Actions artifacts." >> "$GITHUB_STEP_SUMMARY"
