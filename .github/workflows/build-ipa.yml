@@ -49,17 +49,19 @@ jobs:
         run: |
           set -o pipefail
 
-          xcodebuild \
-            -workspace SmartTube.xcworkspace \
-            -scheme SmartTube \
-            -configuration Debug \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/SmartTubeBuild" \
-            SWIFT_OPTIMIZATION_LEVEL=-Onone \
-            CODE_SIGNING_ALLOWED=NO \
-            -jobs 2 \
-            build > build.log 2>&1
+
+xcodebuild \
+  -workspace SmartTube.xcworkspace \
+  -scheme SmartTube \
+  -configuration Release \
+  -sdk iphoneos \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath "$RUNNER_TEMP/SmartTubeBuild" \
+  SWIFT_VERSION=5 \
+  CODE_SIGNING_ALLOWED=NO \
+  -jobs 2 \
+  build > build.log 2>&1
+
 
           RESULT=$?
 
