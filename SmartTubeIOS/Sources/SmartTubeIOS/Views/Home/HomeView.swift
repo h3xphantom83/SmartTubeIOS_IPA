@@ -455,14 +455,38 @@ public struct HomeView: View {
         // collapses to zero height — grid items become invisible and non-tappable
         // because LazyVStack never provides a measured height to LazyVGrid.
         // Row groups are few (typically ≤15 carousels) so eager rendering is fine.
-        let gridVideos = sectionVM.videoGroups.filter { $0.layout != .row }
-            .flatMap(\.videos)
-            .filter { !applyHideShorts || !$0.isShort }
-            .filter { !hideLiveShorts || !($0.isLive && $0.isShort) }
-            .filter { !hideVideoPremieres || !$0.isUpcoming }
-            .filter { !applyHideWatched || !$0.isWatched(threshold: hideWatchedThreshold) }
-            .filter { channelFilter == nil || $0.channelId == channelFilter }
-            .filter { isShorts || !$0.isShort }
+        let gridGroups: [VideoGroup] = sectionVM.videoGroups.filter {
+            $0.layout != .row
+        }
+        
+        let groupVideos: [Video] = gridGroups.flatMap {
+            $0.videos
+        }
+        
+        let shortsFiltered: [Video] = groupVideos.filter {
+            !applyHideShorts || !$0.isShort
+        }
+        
+        let liveFiltered: [Video] = shortsFiltered.filter {
+            !hideLiveShorts || !($0.isLive && $0.isShort)
+        }
+        
+        let premieresFiltered: [Video] = liveFiltered.filter {
+            !hideVideoPremieres || !$0.isUpcoming
+        }
+        
+        let watchedFiltered: [Video] = premieresFiltered.filter {
+            !applyHideWatched ||
+            !$0.isWatched(threshold: hideWatchedThreshold)
+        }
+        
+        let channelFiltered: [Video] = watchedFiltered.filter {
+            channelFilter == nil || $0.channelId == channelFilter
+        }
+        
+        let gridVideos: [Video] = channelFiltered.filter {
+            isShorts || !$0.isShort
+        }
 
         // #62: distinct (channelId, channelTitle) pairs across the currently loaded
         // Subscriptions videos, for the channel-filter menu. Derived client-side from
