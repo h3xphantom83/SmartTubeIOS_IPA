@@ -43,6 +43,7 @@ jobs:
           xcodebuild -list \
             -workspace SmartTube.xcworkspace
 
+
       - name: Build unsigned iOS app
         shell: bash
         run: |
@@ -51,12 +52,35 @@ jobs:
           xcodebuild \
             -workspace SmartTube.xcworkspace \
             -scheme SmartTube \
-            -configuration Release \
+            -configuration Debug \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/SmartTubeBuild" \
+            SWIFT_OPTIMIZATION_LEVEL=-Onone \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee build.log
+            -jobs 2 \
+            build > build.log 2>&1
+
+          RESULT=$?
+
+          echo "========== COMPILER ERRORS =========="
+          grep -n -C 5 -E \
+            'error:|fatal error:|failed|Error Domain=' \
+            build.log | head -200 || true
+
+          echo "========== LAST 100 LINES =========="
+          tail -100 build.log
+
+          exit "$RESULT"
+
+      - name: Upload complete build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartTube-Complete-Build-Log
+          path: build.log
+          if-no-files-found: ignore
+
 
       - name: Display build errors
         if: failure()
